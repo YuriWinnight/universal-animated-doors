@@ -19,10 +19,20 @@ const DOOR_ANIMATIONS = ["none", "ascend", "descend", "slide", "swing", "swivel"
 const DIRECTIONS = ["default", "reverse"];
 const CONFIG_FLAG_KEYS = ["enabled", "texture", "animation", "direction", "double", "flip", "duration", "strength", "refractLight"];
 const LIGHT_UPDATE_TARGETS = Object.freeze({
-  minMs: 24,
-  maxMs: 45,
-  samples: 24,
-  maxLeadMs: 80
+  minMs: 28,
+  maxMs: 88,
+  samples: 16,
+  minLeadMs: 10,
+  maxLeadMs: 58,
+  latencyBudgetMs: 38,
+  criticalLatencyMs: 84,
+  frameBudgetMs: 24,
+  criticalFrameMs: 32,
+  adaptUp: 1.12,
+  criticalAdaptUp: 1.28,
+  adaptDown: 0.82,
+  recoverTicks: 8,
+  recoverMs: 220
 });
 
 const stateOpen = () => CONST?.WALL_DOOR_STATES?.OPEN ?? 1;
@@ -613,13 +623,97 @@ class AnimatedDoorLightBender {
   updateIntervalForDuration(duration) {
     const safeDuration = Math.max(1, Number(duration) || 1);
     const interval = Math.round(safeDuration / LIGHT_UPDATE_TARGETS.samples);
-    return Math.max(LIGHT_UPDATE_TARGETS.minMs, Math.min(LIGHT_UPDATE_TARGETS.maxMs, interval));
+    return this.clampUpdateInterval(interval);
+  }
+
+  clampUpdateInterval(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return LIGHT_UPDATE_TARGETS.minMs;
+    return Math.max(LIGHT_UPDATE_TARGETS.minMs, Math.min(LIGHT_UPDATE_TARGETS.maxMs, number));
+  }
+
+  adaptIntervalForLoad(state, { latency = null, frameGap = null } = {}) {
+    if (!state) return;
+
+    const now = performance.now();
+    const baseInterval = Number(state.baseIntervalMs) || LIGHT_UPDATE_TARGETS.minMs;
+    const interval = Number(state.intervalMs) || baseInterval;
+    const latencyOver = Number.isFinite(latency) && latency > LIGHT_UPDATE_TARGETS.latencyBudgetMs;
+    const latencyCritical = Number.isFinite(latency) && latency > LIGHT_UPDATE_TARGETS.criticalLatencyMs;
+    const frameOver = Number.isFinite(frameGap) && frameGap > LIGHT_UPDATE_TARGETS.frameBudgetMs;
+    const frameCritical = Number.isFinite(frameGap) && frameGap > LIGHT_UPDATE_TARGETS.criticalFrameMs;
+
+    if (latencyOver || frameOver) {
+      const observed = Math.max(
+        Number.isFinite(latency) ? latency : 0,
+        Number.isFinite(frameGap) ? frameGap : 0,
+        interval
+      );
+      const critical = latencyCritical || frameCritical;
+      state.loadStrikes = (state.loadStrikes || 0) + 1;
+      state.lastLoadAt = now;
+      if (!critical && state.loadStrikes < 3) return;
+
+      const multiplier = critical ? LIGHT_UPDATE_TARGETS.criticalAdaptUp : LIGHT_UPDATE_TARGETS.adaptUp;
+      const observedTarget = critical ? observed * 1.1 : interval;
+      const nextInterval = this.clampUpdateInterval(Math.max(interval * multiplier, observedTarget));
+      if (nextInterval > interval) {
+        const lastSentAt = Number(state.lastUpdateSentAt) || 0;
+        if (lastSentAt) state.nextUpdateAt = Math.max(Number(state.nextUpdateAt) || 0, lastSentAt + nextInterval);
+      }
+      state.intervalMs = nextInterval;
+      state.stableLightTicks = 0;
+      return;
+    }
+
+    state.loadStrikes = 0;
+    state.stableLightTicks = (state.stableLightTicks || 0) + 1;
+    const lastLoadAt = Number(state.lastLoadAt) || 0;
+    const lastRecoverAt = Number(state.lastRecoverAt) || 0;
+    const canRecover = (!lastLoadAt || now - lastLoadAt >= LIGHT_UPDATE_TARGETS.recoverMs)
+      && (!lastRecoverAt || now - lastRecoverAt >= LIGHT_UPDATE_TARGETS.recoverMs);
+
+    if (canRecover && state.stableLightTicks >= LIGHT_UPDATE_TARGETS.recoverTicks && interval > baseInterval) {
+      state.intervalMs = Math.max(baseInterval, this.clampUpdateInterval(interval * LIGHT_UPDATE_TARGETS.adaptDown));
+      state.stableLightTicks = 0;
+      state.lastRecoverAt = now;
+    }
   }
 
   updateLeadForState(state) {
     const interval = Number(state?.intervalMs) || LIGHT_UPDATE_TARGETS.minMs;
     const latency = Number.isFinite(state?.updateLatencyMs) ? state.updateLatencyMs : interval;
-    return Math.min(LIGHT_UPDATE_TARGETS.maxLeadMs, Math.max(interval, Math.round((interval * 0.75) + (latency * 0.5))));
+    return Math.min(
+      LIGHT_UPDATE_TARGETS.maxLeadMs,
+      Math.max(LIGHT_UPDATE_TARGETS.minLeadMs, Math.round((interval * 0.35) + (latency * 0.25)))
+    );
+  }
+
+  startFrameMonitor(sourceId, token) {
+    if (typeof requestAnimationFrame !== "function") return;
+
+    const state = this.active.get(sourceId);
+    if (!state || state.token !== token || state.frameRaf) return;
+
+    const sample = (now) => {
+      const current = this.active.get(sourceId);
+      if (!current || current.token !== token || current.cleaning) return;
+
+      if (Number.isFinite(current.lastFrameAt)) {
+        const gap = now - current.lastFrameAt;
+        if (Number.isFinite(gap) && gap > 0) {
+          current.frameGapMs = Number.isFinite(current.frameGapMs)
+            ? lerp(current.frameGapMs, gap, 0.35)
+            : gap;
+          this.adaptIntervalForLoad(current, { frameGap: current.frameGapMs });
+        }
+      }
+
+      current.lastFrameAt = now;
+      current.frameRaf = requestAnimationFrame(sample);
+    };
+
+    state.frameRaf = requestAnimationFrame(sample);
   }
 
   getOverlaySegments(overlay, timeline, duration, sampleAt) {
@@ -648,18 +742,55 @@ class AnimatedDoorLightBender {
     return updates;
   }
 
+  storePendingUpdates(state, updates) {
+    if (!state.pendingUpdates) state.pendingUpdates = new Map();
+    for (const update of updates) state.pendingUpdates.set(update._id, update);
+  }
+
+  schedulePendingUpdates(scene, sourceId, token) {
+    const state = this.active.get(sourceId);
+    if (!scene || !state || state.token !== token || state.cleaning || !state.pendingUpdates?.size) return;
+    if (state.updateInFlight || state.drainTimer) return;
+
+    const waitMs = Math.max(1, (Number(state.nextUpdateAt) || 0) - performance.now());
+    state.drainTimer = setTimeout(() => {
+      const current = this.active.get(sourceId);
+      if (!current || current.token !== token || current.cleaning) return;
+
+      current.drainTimer = null;
+      if (current.updateInFlight || !current.pendingUpdates?.size) return;
+
+      const pending = current.pendingUpdates;
+      current.pendingUpdates = null;
+      this.queueWallUpdates(scene, sourceId, token, Array.from(pending.values()));
+    }, waitMs);
+  }
+
   queueWallUpdates(scene, sourceId, token, updates) {
     const state = this.active.get(sourceId);
     if (!scene || !state || state.token !== token || state.cleaning || !updates.length) return;
 
     if (state.updateInFlight) {
-      if (!state.pendingUpdates) state.pendingUpdates = new Map();
-      for (const update of updates) state.pendingUpdates.set(update._id, update);
+      this.storePendingUpdates(state, updates);
       return;
+    }
+
+    const now = performance.now();
+    if ((Number(state.nextUpdateAt) || 0) > now) {
+      this.storePendingUpdates(state, updates);
+      this.schedulePendingUpdates(scene, sourceId, token);
+      return;
+    }
+
+    if (state.drainTimer) {
+      clearTimeout(state.drainTimer);
+      state.drainTimer = null;
     }
 
     state.updateInFlight = true;
     const sentAt = performance.now();
+    state.lastUpdateSentAt = sentAt;
+    state.nextUpdateAt = sentAt + (Number(state.intervalMs) || LIGHT_UPDATE_TARGETS.minMs);
 
     scene.updateEmbeddedDocuments("Wall", updates, { render: false, diff: false })
       .catch((error) => {
@@ -674,14 +805,17 @@ class AnimatedDoorLightBender {
           current.updateLatencyMs = Number.isFinite(current.updateLatencyMs)
             ? lerp(current.updateLatencyMs, elapsed, 0.25)
             : elapsed;
+          this.adaptIntervalForLoad(current, { latency: elapsed });
         }
 
+        current.nextUpdateAt = Math.max(
+          Number(current.nextUpdateAt) || 0,
+          sentAt + (Number(current.intervalMs) || LIGHT_UPDATE_TARGETS.minMs)
+        );
         current.updateInFlight = false;
         if (current.cleaning) return;
 
-        const pending = current.pendingUpdates;
-        current.pendingUpdates = null;
-        if (pending?.size) this.queueWallUpdates(scene, sourceId, token, Array.from(pending.values()));
+        this.schedulePendingUpdates(scene, sourceId, token);
       });
   }
 
@@ -823,10 +957,20 @@ class AnimatedDoorLightBender {
       token,
       ids: [],
       timer: null,
+      drainTimer: null,
       updateInFlight: false,
       pendingUpdates: null,
       updateLatencyMs: intervalMs,
+      baseIntervalMs: intervalMs,
       intervalMs,
+      stableLightTicks: 0,
+      loadStrikes: 0,
+      lastLoadAt: 0,
+      lastRecoverAt: 0,
+      lastUpdateSentAt: 0,
+      frameRaf: null,
+      lastFrameAt: null,
+      frameGapMs: null,
       cleaning: false,
       closing,
       restore: closing ? sourceLightData : null,
@@ -849,7 +993,7 @@ class AnimatedDoorLightBender {
 
       state.ids = created.map((wall) => wall.id).filter(Boolean);
       if (closing) await this.neutralizeSourceWall(sourceId, sourceLightData);
-      syncScenePerception();
+      this.startFrameMonitor(sourceId, token);
 
       const tick = () => {
         const current = this.active.get(sourceId);
@@ -886,6 +1030,8 @@ class AnimatedDoorLightBender {
     this.active.delete(sourceId);
     state.cleaning = true;
     if (state.timer) clearTimeout(state.timer);
+    if (state.drainTimer) clearTimeout(state.drainTimer);
+    if (state.frameRaf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(state.frameRaf);
 
     this.finishState(sourceId, state);
   }
@@ -901,12 +1047,12 @@ class AnimatedDoorLightBender {
       debug("Could not finish light refraction cleanup", error);
     } finally {
       this.pendingClosures.delete(sourceId);
-      syncScenePerception();
     }
   }
 
   async cleanupScene() {
     if (!canvas?.scene || !isResponsibleGM()) return;
+
     const walls = Array.from(canvas.scene.walls ?? []);
     const ids = walls
       .filter((wall) => isTemporaryLightWall(wall))

@@ -15,6 +15,73 @@ light-blocking walls with the door animation.
 Existing door flags from `v11-animated-doors` are still read, so configured
 doors keep their textures and animation settings after the package rename.
 
+## 0.6.4
+
+- Added a real requestAnimationFrame frame monitor for light refraction. The
+  module now reacts to actual client FPS drops instead of only measuring Wall
+  document update latency.
+- Rebalanced the default light-wall cadence to a smoother-but-safer target of
+  roughly 16 light positions for a 500 ms door animation.
+- Adaptive throttling now starts backing off when frames repeatedly exceed the
+  smooth-frame budget, so scenes dropping toward the 30-40 FPS range reduce Wall
+  update pressure automatically.
+- Recovery is intentionally slower than slowdown, preventing rapid interval
+  oscillation while a door is moving.
+
+## 0.6.3
+
+- Rebalanced light refraction toward smoothness again. Standard 500 ms door
+  animations now target roughly 18 light-wall positions instead of the visibly
+  stepped 0.6.2 cadence.
+- Made adaptive throttling less abrupt: normal overload now needs repeated slow
+  updates before the interval backs off, while severe stalls still trigger a
+  protective slowdown.
+- Shortened predictive light sampling so shadows no longer jump unnaturally far
+  ahead of the visible door texture.
+- Kept pending-coordinate coalescing and duplicate perception-refresh removal
+  from 0.6.2, so the smoother cadence still avoids stale update backlogs.
+
+## 0.6.2
+
+- Reduced the default temporary light-wall cadence to a player-safer 48-130 ms
+  range while keeping the visible door texture animation on requestAnimationFrame.
+- Added adaptive light-wall pacing. If Foundry wall updates or the client event
+  loop start taking too long, the module backs off automatically instead of
+  forcing the scene to recalculate lighting too often.
+- Coalesced pending light-wall coordinates now drain on the same adaptive
+  cadence, so slow scenes do not immediately start another heavy wall update as
+  soon as the previous one finishes.
+- Keeps predictive light sampling so the shadow still follows fast 500 ms door
+  swings without needing high-frequency Wall document updates.
+- Removed duplicate explicit perception refreshes from normal door open/close
+  cleanup. Foundry already queues lighting and vision recalculation for Wall
+  create/update/delete operations; the manual refresh remains only for old
+  temporary-wall cleanup.
+
+## 0.6.1
+
+- Removed the 0.6.0 virtual quadtree light-wall path because it could freeze the
+  Foundry canvas while UI controls still responded.
+- Restored the stable temporary Wall document light-refraction workflow.
+- Kept latest-coordinate coalescing while a previous wall update is still in
+  flight, so the module avoids building a backlog of stale movement updates.
+- Uses a conservative 30-60 ms light-wall cadence with adaptive lead sampling to
+  reduce texture/shadow lag without returning to unsafe local quadtree mutation.
+
+## 0.6.0
+
+- Reworked light refraction to use local virtual light walls registered in the
+  Foundry wall quadtree instead of creating and moving temporary Wall documents.
+- Light-wall movement no longer sends per-step scene document updates or socket
+  traffic; each client computes the animated blocker locally.
+- Closing doors now locally relax the real wall's light/sight restriction during
+  the animation and restore it at the end, so light fades with the moving
+  virtual wall without mutating the world document.
+- Virtual walls maintain nearby intersection data against existing walls and
+  scene bounds, then clean those intersections when they move or are removed.
+- Kept cleanup for temporary Wall documents and restore flags left behind by
+  older 0.4-0.5 builds.
+
 ## 0.5.4
 
 - Synced temporary light-wall sampling to the same animation timeline used by
