@@ -1,0 +1,6 @@
+{
+  "V11AD.Settings.DefaultTexture.Name": "Default door texture",
+  "V11AD.Settings.DefaultTexture.Hint": "Texture path used for new animated doors.",
+  "V11AD.Settings.Debug.Name": "Door debug",
+  "V11AD.Settings.Debug.Hint": "Show warnings and console messages if a texture fails to load."
+}

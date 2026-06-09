@@ -1,0 +1,83 @@
+.v11ad-wall-config {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem 0.65rem;
+  border: 1px solid var(--color-border-light-tertiary, #7a7971);
+  border-radius: 4px;
+}
+
+.v11ad-wall-config legend {
+  padding: 0 0.35rem;
+  font-weight: 700;
+}
+
+.v11ad-wall-config .form-group label {
+  flex: 0 0 42%;
+}
+
+.v11ad-wall-config .form-group input,
+.v11ad-wall-config .form-group select {
+  flex: 1;
+}
+
+.v11ad-file-row {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  width: 100%;
+}
+
+.v11ad-file-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.v11ad-file-row button {
+  flex: 0 0 30px;
+}
+
+.window-app.v11ad-resizable-window {
+  min-width: 460px !important;
+  min-height: 420px !important;
+  resize: both;
+  overflow: hidden !important;
+}
+
+.window-app.v11ad-resizable-window .window-content {
+  overflow: auto !important;
+  min-height: 0;
+}
+
+.window-app.v11ad-resizable-window .window-content form {
+  min-height: min-content;
+}
+
+.v11ad-resize-handle {
+  position: absolute !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 24px !important;
+  height: 24px !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  cursor: nwse-resize !important;
+  opacity: 0.9;
+  z-index: 100000 !important;
+  pointer-events: auto !important;
+  color: #111;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 3px 0 0 0;
+  text-shadow: 0 0 2px #fff;
+}
+
+.v11ad-resize-handle:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+body.v11ad-resizing,
+body.v11ad-resizing * {
+  cursor: nwse-resize !important;
+  user-select: none !important;
+}
