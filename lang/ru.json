@@ -2,5 +2,10 @@
   "V11AD.Settings.DefaultTexture.Name": "Текстура двери по умолчанию",
   "V11AD.Settings.DefaultTexture.Hint": "Путь к текстуре, который подставляется в новых анимированных дверях.",
   "V11AD.Settings.Debug.Name": "Отладка дверей",
-  "V11AD.Settings.Debug.Hint": "Показывать предупреждения и сообщения в консоли, если текстура не загрузилась."
+  "V11AD.Settings.Debug.Hint": "Показывать предупреждения и сообщения в консоли, если текстура не загрузилась.",
+  "UAD.DoorSound.HeavyWoodSliding": "Тяжёлая деревянная раздвижная дверь",
+  "UAD.DoorSound.HeavyStoneSliding": "Тяжёлая каменная раздвижная дверь",
+  "UAD.DoorSound.HeavyMetalSliding": "Тяжёлая металлическая раздвижная дверь",
+  "UAD.DoorSound.HeavyPrisonCell": "Тяжёлая дверь клетки камеры тюрьмы",
+  "UAD.DoorSound.HugeCityMetalGate": "Огромные металлические ворота города"
 }

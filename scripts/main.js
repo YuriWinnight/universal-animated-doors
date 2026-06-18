@@ -2,6 +2,7 @@ const MODULE_ID = "universal-animated-doors";
 const LEGACY_MODULE_IDS = Object.freeze(["v11-animated-doors"]);
 const PACKAGE_IDS = Object.freeze([MODULE_ID, ...LEGACY_MODULE_IDS]);
 const CLOSING_LIGHT_RESTORE_FLAG = "closingLightRestore";
+const DOOR_PRIMARY_SORT = -1;
 
 const DEFAULTS = Object.freeze({
   enabled: true,
@@ -12,12 +13,14 @@ const DEFAULTS = Object.freeze({
   flip: false,
   duration: 500,
   strength: 1,
-  refractLight: true
+  refractLight: true,
+  offsetX: 0,
+  offsetY: 0
 });
 
 const DOOR_ANIMATIONS = ["none", "ascend", "descend", "slide", "swing", "swivel"];
 const DIRECTIONS = ["default", "reverse"];
-const CONFIG_FLAG_KEYS = ["enabled", "texture", "animation", "direction", "double", "flip", "duration", "strength", "refractLight"];
+const CONFIG_FLAG_KEYS = ["enabled", "texture", "animation", "direction", "double", "flip", "duration", "strength", "refractLight", "offsetX", "offsetY"];
 const LIGHT_UPDATE_TARGETS = Object.freeze({
   minMs: 28,
   maxMs: 88,
@@ -37,6 +40,7 @@ const LIGHT_UPDATE_TARGETS = Object.freeze({
 
 const stateOpen = () => CONST?.WALL_DOOR_STATES?.OPEN ?? 1;
 const doorDoor = () => CONST?.WALL_DOOR_TYPES?.DOOR ?? 1;
+const doorSecret = () => CONST?.WALL_DOOR_TYPES?.SECRET ?? 2;
 const doorNone = () => CONST?.WALL_DOOR_TYPES?.NONE ?? 0;
 
 const RU = Object.freeze({
@@ -49,6 +53,9 @@ const RU = Object.freeze({
   direction: "Направление открытия",
   strength: "Сила анимации",
   refractLight: "Свет",
+  offsetX: "Сдвиг текстуры X",
+  offsetY: "Сдвиг текстуры Y",
+  sound: "Звук двери",
   choose: "Выбрать",
   none: "Нет",
   ascend: "Подъём",
@@ -58,9 +65,39 @@ const RU = Object.freeze({
   swivel: "Поворот",
   default: "Обычное",
   reverse: "Обратное",
+  heavyWood: "Тяжёлая деревянная раздвижная дверь",
+  heavyStone: "Тяжёлая каменная раздвижная дверь",
+  heavyMetal: "Тяжёлая металлическая раздвижная дверь",
+  prisonCell: "Тяжёлая дверь клетки камеры",
+  cityGate: "Огромные металлические ворота города",
   saveError: "Не удалось сохранить настройки анимированной двери.",
   textureError: "Не удалось загрузить текстуру двери"
 });
+
+const MODULE_DOOR_SOUNDS = Object.freeze({
+  uadHeavyWoodSliding: {
+    label: "UAD.DoorSound.HeavyWoodSliding",
+    file: "heavy-wooden-sliding-door.wav"
+  },
+  uadHeavyStoneSliding: {
+    label: "UAD.DoorSound.HeavyStoneSliding",
+    file: "heavy-stone-sliding-door.wav"
+  },
+  uadHeavyMetalSliding: {
+    label: "UAD.DoorSound.HeavyMetalSliding",
+    file: "heavy-metal-sliding-door.wav"
+  },
+  uadHeavyPrisonCell: {
+    label: "UAD.DoorSound.HeavyPrisonCell",
+    file: "heavy-prison-cell-door.wav"
+  },
+  uadHugeCityMetalGate: {
+    label: "UAD.DoorSound.HugeCityMetalGate",
+    file: "huge-city-metal-gate.m4a"
+  }
+});
+
+const DOOR_SOUND_INTERACTIONS = Object.freeze(["open", "close", "lock", "unlock", "test"]);
 
 function storedSetting(packageId, key) {
   for (const scope of ["world", "client"]) {
@@ -88,6 +125,18 @@ function setting(key) {
 
 function debug(...args) {
   if (setting("debug")) console.log(`${MODULE_ID} |`, ...args);
+}
+
+function refreshPrimarySort() {
+  const primary = canvas?.primary;
+  if (!primary) return;
+
+  try {
+    primary.sortDirty = true;
+    primary.sortChildren?.();
+  } catch (error) {
+    debug("Could not sort primary canvas group", error);
+  }
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -139,11 +188,16 @@ function sameCoords(a, b) {
 
 function isDoorDocument(document) {
   const doorType = Number(document?.door ?? 0);
-  return doorType === doorDoor();
+  return doorType === doorDoor() || doorType === doorSecret();
+}
+
+function isSecretDoorDocument(document) {
+  return Number(document?.door ?? 0) === doorSecret();
 }
 
 function isDoorFormValue(value) {
-  return Number(value ?? doorNone()) === doorDoor();
+  const doorType = Number(value ?? doorNone());
+  return doorType === doorDoor() || doorType === doorSecret();
 }
 
 function isOpenDocument(document) {
@@ -191,6 +245,22 @@ function syncScenePerception() {
   }
 }
 
+function registerCoreDoorSounds() {
+  const doorSounds = globalThis.CONFIG?.Wall?.doorSounds;
+  if (!doorSounds) return;
+
+  try {
+    for (const [key, preset] of Object.entries(MODULE_DOOR_SOUNDS)) {
+      const src = `modules/${MODULE_ID}/sounds/${preset.file}`;
+      const entry = { label: preset.label };
+      for (const interaction of DOOR_SOUND_INTERACTIONS) entry[interaction] = src;
+      doorSounds[key] = entry;
+    }
+  } catch (error) {
+    debug("Could not register core door sounds", error);
+  }
+}
+
 function escapeHTML(value) {
   const text = String(value ?? "");
   if (foundry?.utils?.escapeHTML) return foundry.utils.escapeHTML(text);
@@ -211,7 +281,9 @@ function readDoorConfig(document) {
     flip: asBoolean(flags.flip ?? DEFAULTS.flip),
     duration: clampNumber(flags.duration, 0, 10000, DEFAULTS.duration),
     strength: clampNumber(flags.strength, 0, 3, DEFAULTS.strength),
-    refractLight: asBoolean(flags.refractLight ?? DEFAULTS.refractLight)
+    refractLight: asBoolean(flags.refractLight ?? DEFAULTS.refractLight),
+    offsetX: clampNumber(flags.offsetX, -10000, 10000, DEFAULTS.offsetX),
+    offsetY: clampNumber(flags.offsetY, -10000, 10000, DEFAULTS.offsetY)
   };
 
   if (!DOOR_ANIMATIONS.includes(cfg.animation)) cfg.animation = DEFAULTS.animation;
@@ -221,7 +293,38 @@ function readDoorConfig(document) {
 }
 
 function cfgKey(cfg) {
-  return [cfg.texture, cfg.animation, cfg.direction, cfg.double, cfg.flip, cfg.refractLight].join("|");
+  return [cfg.texture, cfg.animation, cfg.direction, cfg.double, cfg.flip, cfg.refractLight, cfg.offsetX, cfg.offsetY].join("|");
+}
+
+function wallElevationValue(document) {
+  const flags = document?.flags ?? {};
+  const candidates = [
+    document?.bottom,
+    document?._source?.bottom,
+    document?.elevation,
+    document?._source?.elevation,
+    flags?.["wall-height"]?.bottom,
+    flags?.["wall-height"]?.heightBottom,
+    flags?.levels?.rangeBottom,
+    flags?.levels?.wallHeightBottom,
+    flags?.levels?.elevation
+  ];
+
+  for (const value of candidates) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+
+  return 0;
+}
+
+function wallGeometryKey(document) {
+  const coords = getWallCoords(document);
+  return `${coords?.map((value) => Math.round(Number(value))).join(",") ?? ""}|${wallElevationValue(document)}`;
+}
+
+function doorSortIndex(document) {
+  return DOOR_PRIMARY_SORT;
 }
 
 async function loadDoorTexture(path) {
@@ -278,11 +381,12 @@ function textureSlice(texture, part) {
 }
 
 class AnimatedDoorOverlay {
-  constructor(document, cfg, texture) {
+  constructor(document, cfg, texture, { initialOpen = isOpenDocument(document) } = {}) {
     this.document = document;
     this.cfg = cfg;
     this.texture = texture;
     this.key = cfgKey(cfg);
+    this.geometryKey = wallGeometryKey(document);
     this.root = new PIXI.Container();
     this.root.name = `${MODULE_ID}.${document.id}`;
     this.root.sortableChildren = true;
@@ -292,8 +396,10 @@ class AnimatedDoorOverlay {
     this.panels = [];
     this._raf = null;
     this._destroyed = false;
+    this.updateSort();
+    this.updateTextureOffset();
     this.rebuildPanels();
-    this.applyState(isOpenDocument(document), false);
+    this.applyState(initialOpen, false);
   }
 
   destroy() {
@@ -309,10 +415,29 @@ class AnimatedDoorOverlay {
     this.cfg = cfg;
     if (texture) this.texture = texture;
     const nextKey = cfgKey(cfg);
-    if (nextKey !== this.key) {
+    const nextGeometryKey = wallGeometryKey(document);
+    if (nextKey !== this.key || nextGeometryKey !== this.geometryKey) {
       this.key = nextKey;
+      this.geometryKey = nextGeometryKey;
+      this.updateSort();
+      this.updateTextureOffset();
       this.rebuildPanels();
     }
+  }
+
+  updateSort() {
+    const sort = doorSortIndex(this.document);
+    this.root.zIndex = sort;
+    this.root.sort = sort;
+    this.root.elevation = wallElevationValue(this.document);
+    this.root.shouldRenderDepth = false;
+    if (this.root.parent === canvas?.primary) refreshPrimarySort();
+  }
+
+  updateTextureOffset() {
+    const x = clampNumber(this.cfg?.offsetX, -10000, 10000, 0);
+    const y = clampNumber(this.cfg?.offsetY, -10000, 10000, 0);
+    this.root.position.set(x, y);
   }
 
   rebuildPanels() {
@@ -1089,20 +1214,27 @@ const lightBender = new AnimatedDoorLightBender();
 class AnimatedDoorManager {
   constructor() {
     this.container = null;
+    this.ownsContainer = false;
     this.doors = new Map();
     this.loading = new Map();
+    this.secretHideTimers = new Map();
   }
 
   getOverlayParent() {
-    // The artwork must be visible above the scene background but below every
-    // Wall and door-control graphic.  In v11 the safest place is the WallsLayer
-    // itself, as the first child: the layer stays in world coordinates, while
-    // the wall line and the clickable door icon are drawn after our container.
+    // Render door artwork in the primary canvas group so Scene foregrounds and
+    // wall/roof tiles can naturally occlude it by elevation and sort order.
+    const primary = canvas?.primary;
+    if (primary && typeof primary.addChild === "function") return primary;
+
     const wallsLayer = canvas?.walls;
     if (wallsLayer && typeof wallsLayer.addChild === "function") return wallsLayer;
 
     const candidates = [canvas?.interface, canvas?.primary, canvas?.stage, canvas?.background];
     return candidates.find((parent) => parent && typeof parent.addChild === "function") ?? null;
+  }
+
+  usesSharedOverlayParent(parent) {
+    return parent && parent === canvas?.primary;
   }
 
   placeContainerBelowWalls(parent) {
@@ -1165,7 +1297,16 @@ class AnimatedDoorManager {
     const parent = this.getOverlayParent();
     if (!parent) return null;
 
-    if (!this.container || this.container.destroyed) {
+    if (this.usesSharedOverlayParent(parent)) {
+      if (this.container && this.ownsContainer && !this.container.destroyed) this.container.destroy({ children: true });
+      this.container = parent;
+      this.ownsContainer = false;
+      parent.sortableChildren = true;
+      refreshPrimarySort();
+      return parent;
+    }
+
+    if (!this.container || !this.ownsContainer || this.container.destroyed) {
       this.container = new PIXI.Container();
       this.container.name = MODULE_ID;
       this.container.sortableChildren = true;
@@ -1173,6 +1314,7 @@ class AnimatedDoorManager {
       this.container.interactive = false;
       this.container.interactiveChildren = false;
       this.container.eventMode = "none";
+      this.ownsContainer = true;
     }
 
     if (this.container.parent && this.container.parent !== parent) this.container.parent.removeChild(this.container);
@@ -1184,11 +1326,15 @@ class AnimatedDoorManager {
 
   clear() {
     lightBender.stopAll();
+    for (const timer of this.secretHideTimers.values()) clearTimeout(timer);
+    this.secretHideTimers.clear();
     for (const door of this.doors.values()) door.destroy();
     this.doors.clear();
     this.loading.clear();
-    if (this.container && !this.container.destroyed) this.container.destroy({ children: true });
+    if (this.ownsContainer && this.container && !this.container.destroyed) this.container.destroy({ children: true });
     this.container = null;
+    this.ownsContainer = false;
+    refreshPrimarySort();
   }
 
   rebuild() {
@@ -1199,8 +1345,30 @@ class AnimatedDoorManager {
     debug("rebuilt overlays");
   }
 
-  shouldDraw(document, cfg = readDoorConfig(document)) {
-    return Boolean(canvas?.ready && document && isDoorDocument(document) && cfg.enabled && cfg.animation !== "none" && cfg.texture && getWallCoords(document));
+  shouldDraw(document, cfg = readDoorConfig(document), { existing = null, animate = false } = {}) {
+    if (!canvas?.ready || !document || !isDoorDocument(document) || !cfg.enabled || cfg.animation === "none" || !cfg.texture || !getWallCoords(document)) return false;
+    if (!isSecretDoorDocument(document) || game?.user?.isGM || isOpenDocument(document)) return true;
+    return Boolean(existing && animate);
+  }
+
+  clearSecretHideTimer(id) {
+    const timer = this.secretHideTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.secretHideTimers.delete(id);
+  }
+
+  scheduleSecretHide(document, cfg, animate) {
+    const id = document?.id;
+    if (!id) return;
+    this.clearSecretHideTimer(id);
+    if (game?.user?.isGM || !isSecretDoorDocument(document) || isOpenDocument(document)) return;
+
+    const delay = animate ? Math.max(0, Number(cfg?.duration) || 0) + 80 : 0;
+    const timer = setTimeout(() => {
+      this.secretHideTimers.delete(id);
+      this.removeWall(id);
+    }, delay);
+    this.secretHideTimers.set(id, timer);
   }
 
   async refreshWall(wall, { animate = true } = {}) {
@@ -1208,7 +1376,8 @@ class AnimatedDoorManager {
     if (!document?.id) return;
 
     const cfg = readDoorConfig(document);
-    if (!this.shouldDraw(document, cfg)) {
+    const existing = this.doors.get(document.id);
+    if (!this.shouldDraw(document, cfg, { existing, animate })) {
       this.removeWall(document.id);
       return;
     }
@@ -1216,13 +1385,13 @@ class AnimatedDoorManager {
     const container = this.ensureContainer();
     if (!container) return;
 
-    const existing = this.doors.get(document.id);
     const nextKey = cfgKey(cfg);
     const needsTexture = !existing || existing.key !== nextKey;
 
     if (!needsTexture) {
       existing.updateDocument(document, cfg);
       existing.applyState(isOpenDocument(document), animate);
+      this.scheduleSecretHide(document, cfg, animate);
       this.scheduleLayerOrderCheck();
       return;
     }
@@ -1239,14 +1408,19 @@ class AnimatedDoorManager {
     }
 
     this.removeWall(document.id);
-    const overlay = new AnimatedDoorOverlay(document, cfg, texture);
+    const targetOpen = isOpenDocument(document);
+    const initialOpen = animate ? !targetOpen : targetOpen;
+    const overlay = new AnimatedDoorOverlay(document, cfg, texture, { initialOpen });
     container.addChild(overlay.root);
+    if (container === canvas?.primary) refreshPrimarySort();
     this.doors.set(document.id, overlay);
-    overlay.applyState(isOpenDocument(document), animate);
+    overlay.applyState(targetOpen, animate);
+    this.scheduleSecretHide(document, cfg, animate);
     this.scheduleLayerOrderCheck();
   }
 
   removeWall(id) {
+    this.clearSecretHideTimer(id);
     const overlay = this.doors.get(id);
     if (overlay) overlay.destroy();
     this.doors.delete(id);
@@ -1287,7 +1461,9 @@ function getV11ADFormData(form, document = null) {
     flip: readCheckboxField(form, "flip", current.flip),
     duration: clampNumber(readTextField(form, "duration", current.duration), 0, 10000, DEFAULTS.duration),
     strength: clampNumber(readTextField(form, "strength", current.strength), 0, 3, DEFAULTS.strength),
-    refractLight: readCheckboxField(form, "refractLight", current.refractLight)
+    refractLight: readCheckboxField(form, "refractLight", current.refractLight),
+    offsetX: clampNumber(readTextField(form, "offsetX", current.offsetX), -10000, 10000, DEFAULTS.offsetX),
+    offsetY: clampNumber(readTextField(form, "offsetY", current.offsetY), -10000, 10000, DEFAULTS.offsetY)
   };
 
   if (!DOOR_ANIMATIONS.includes(cfg.animation)) cfg.animation = DEFAULTS.animation;
@@ -1313,7 +1489,7 @@ function getFormDoorValue(form, formData, document) {
   return candidates.find((value) => value !== null && value !== undefined);
 }
 
-function isSubmittingAsNormalDoor(form, formData, document) {
+function isSubmittingAsDoor(form, formData, document) {
   return isDoorFormValue(getFormDoorValue(form, formData, document));
 }
 
@@ -1359,8 +1535,8 @@ function patchWallConfig() {
     const document = getWallDocument(this.object);
     const wallId = document?.id;
     const form = this.form;
-    const normalDoor = form && isSubmittingAsNormalDoor(form, formData, document);
-    const cfg = normalDoor
+    const submittingDoor = form && isSubmittingAsDoor(form, formData, document);
+    const cfg = submittingDoor
       ? getV11ADFormData(form, document)
       : { ...readDoorConfig(document), enabled: false };
 
@@ -1450,7 +1626,7 @@ function checked(value) {
 
 function dtypeForKey(key) {
   if (["enabled", "double", "flip", "refractLight"].includes(key)) return "Boolean";
-  if (["duration", "strength"].includes(key)) return "Number";
+  if (["duration", "strength", "offsetX", "offsetY"].includes(key)) return "Number";
   return "String";
 }
 
@@ -1518,6 +1694,16 @@ function renderWallConfig(app, html) {
       </div>
 
       <div class="form-group">
+        <label>${RU.offsetX}</label>
+        <input type="number" ${inputAttrs("offsetX")} min="-10000" max="10000" step="1" value="${cfg.offsetX}">
+      </div>
+
+      <div class="form-group">
+        <label>${RU.offsetY}</label>
+        <input type="number" ${inputAttrs("offsetY")} min="-10000" max="10000" step="1" value="${cfg.offsetY}">
+      </div>
+
+      <div class="form-group">
         <label>${RU.flip}</label>
         <input type="checkbox" ${inputAttrs("flip")} value="true" ${checked(cfg.flip)}>
       </div>
@@ -1582,6 +1768,8 @@ function renderWallConfig(app, html) {
 }
 
 Hooks.once("init", () => {
+  registerCoreDoorSounds();
+
   game.settings.register(MODULE_ID, "defaultTexture", {
     name: "Текстура двери по умолчанию",
     hint: "Путь к текстуре, который подставляется в новых анимированных дверях.",
@@ -1604,6 +1792,8 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("ready", () => {
+  registerCoreDoorSounds();
+
   const module = game.modules.get(MODULE_ID);
   if (module) {
     module.api = {

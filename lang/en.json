@@ -2,5 +2,10 @@
   "V11AD.Settings.DefaultTexture.Name": "Default door texture",
   "V11AD.Settings.DefaultTexture.Hint": "Texture path used for new animated doors.",
   "V11AD.Settings.Debug.Name": "Door debug",
-  "V11AD.Settings.Debug.Hint": "Show warnings and console messages if a texture fails to load."
+  "V11AD.Settings.Debug.Hint": "Show warnings and console messages if a texture fails to load.",
+  "UAD.DoorSound.HeavyWoodSliding": "Heavy wooden sliding door",
+  "UAD.DoorSound.HeavyStoneSliding": "Heavy stone sliding door",
+  "UAD.DoorSound.HeavyMetalSliding": "Heavy metal sliding door",
+  "UAD.DoorSound.HeavyPrisonCell": "Heavy prison cell door",
+  "UAD.DoorSound.HugeCityMetalGate": "Huge city metal gate"
 }

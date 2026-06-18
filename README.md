@@ -15,6 +15,70 @@ light-blocking walls with the door animation.
 Existing door flags from `v11-animated-doors` are still read, so configured
 doors keep their textures and animation settings after the package rename.
 
+## 0.6.10
+
+- Replaced the huge city metal gate preset with the user-provided
+  `254762661_nw_prev.m4a` audio file, bundled as
+  `sounds/huge-city-metal-gate.m4a`.
+
+## 0.6.9
+
+- Replaced the huge city metal gate preset with an original medieval-style
+  portcullis/city-gate WAV. It no longer uses the modern industrial sliding
+  door sound.
+- Added per-door visual texture offsets: `offsetX` and `offsetY`, in scene
+  pixels. These move only the animated door artwork; the Foundry Wall document,
+  clickable door control, secret-door state, and light-refraction wall remain
+  anchored to the original wall coordinates.
+
+## 0.6.8
+
+- Door artwork now renders in Foundry's primary canvas group instead of inside
+  the Walls layer. Foreground images, roof tiles, and wall-art tiles can now
+  occlude animated door textures by normal Foundry elevation/sort rules, so
+  door textures no longer draw through higher wall art.
+- Door artwork keeps a low primary sort value at its wall elevation. It stays
+  above the scene background but below same-elevation tiles with normal tile
+  sort values.
+- Keeps the 0.6.7 native `doorSound` registration for the bundled sound
+  presets.
+
+## 0.6.7
+
+- Registers the five bundled door sounds as standard Foundry `doorSound`
+  choices, so they appear in the native Wall Configuration sound dropdown and
+  work with Foundry's built-in preview button.
+- Removed the separate module-specific sound selector from the animated-door
+  fieldset. Door sounds now use the same field as every other Foundry door
+  sound preset.
+- Kept legacy module sound flags harmlessly ignored; existing animation,
+  texture, secret-door, and light-refraction settings are not reset.
+
+## 0.6.6
+
+- Reverted the 0.6.5 vertical texture stretching. Door textures are again only
+  fitted down to the grid height when they are too tall; they are not enlarged
+  to wall-height or levels data.
+- Keeps wall geometry rebuilds, but elevation/height flags are now used only for
+  door texture sorting, not for sprite scaling.
+- Door sounds now use the module socket with local playback fallback instead of
+  relying only on `AudioHelper.play(..., true)`, so selected presets should play
+  for connected clients more reliably.
+- Sound playback is restricted to bundled preset paths.
+
+## 0.6.5
+
+- Secret doors now use the same animated-door path as normal doors. Saving a
+  secret door no longer disables or clears the module's door flags.
+- Door textures now scale to the wall's visual height. Native scenes use the
+  grid size; wall-height/levels-style elevation flags are used when present.
+- Rebuilds the door overlay when wall geometry changes, so moved or resized
+  walls no longer keep stale texture dimensions.
+- Added bundled door sound presets: heavy wooden sliding door, heavy stone
+  sliding door, heavy metal sliding door, heavy prison cell door, and huge city
+  metal gate. Sounds are off by default per door.
+- Bundled sound source attribution is in `sounds/LICENSES.md`.
+
 ## 0.6.4
 
 - Added a real requestAnimationFrame frame monitor for light refraction. The
