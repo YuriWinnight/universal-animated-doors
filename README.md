@@ -15,6 +15,28 @@ light-blocking walls with the door animation.
 Existing door flags from `v11-animated-doors` are still read, so configured
 doors keep their textures and animation settings after the package rename.
 
+## 0.6.13
+
+- Closing doors no longer temporarily set the real wall's `sight` and `light`
+  restrictions to `None`. Foundry blocks vision and light immediately according
+  to the wall settings as soon as the door closes, unless those settings are
+  intentionally set to `None`.
+- Legacy cleanup for old restore flags remains, so walls affected by older
+  builds can still be repaired on scene load.
+
+## 0.6.12
+
+- Added a fail-safe restore for the real wall's `sight` and `light`
+  restrictions after closing-door light refraction. If Foundry drops or delays
+  the normal animation cleanup, the wall no longer remains stuck as
+  `None/None`, so players should not see through a closed door.
+
+## 0.6.11
+
+- Secret doors now keep their animated door texture visible to players while
+  still relying on Foundry's native secret-door behavior for the hidden wall and
+  door-control icon. The module's artwork remains non-interactive.
+
 ## 0.6.10
 
 - Replaced the huge city metal gate preset with the user-provided

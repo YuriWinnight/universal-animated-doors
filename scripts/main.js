@@ -718,7 +718,6 @@ class AnimatedDoorOverlay {
 class AnimatedDoorLightBender {
   constructor() {
     this.active = new Map();
-    this.pendingClosures = new Map();
     this.ignoredSourceUpdates = new Set();
   }
 
@@ -739,10 +738,8 @@ class AnimatedDoorLightBender {
   }
 
   getSourceLightData(document) {
-    const sourceId = document?.id;
-    const pending = sourceId ? this.pendingClosures.get(sourceId)?.restore : null;
     const flagged = getClosingLightRestore(document);
-    return this.normalizeLightData(pending ?? flagged ?? document, document);
+    return this.normalizeLightData(flagged ?? document, document);
   }
 
   updateIntervalForDuration(duration) {
@@ -971,11 +968,6 @@ class AnimatedDoorLightBender {
 
     const restore = this.normalizeLightData(document);
     if (!this.hasBlockingLight(restore)) return;
-
-    this.pendingClosures.set(document.id, { restore });
-    changes.sight = 0;
-    changes.light = 0;
-    changes[`flags.${MODULE_ID}.${CLOSING_LIGHT_RESTORE_FLAG}`] = restore;
   }
 
   shouldIgnoreSourceWallUpdate(document, changes = {}) {
@@ -999,42 +991,6 @@ class AnimatedDoorLightBender {
 
     for (const id of PACKAGE_IDS) update[`flags.${id}.-=${CLOSING_LIGHT_RESTORE_FLAG}`] = null;
     return update;
-  }
-
-  async neutralizeSourceWall(sourceId, restore) {
-    const scene = canvas?.scene;
-    const wall = scene?.walls?.get?.(sourceId);
-    if (!scene || !wall || !restore) return;
-
-    const current = this.normalizeLightData(wall);
-    const alreadyNeutral = current.sight === 0 && current.light === 0 && getClosingLightRestore(wall);
-    if (alreadyNeutral) return;
-
-    const update = {
-      _id: sourceId,
-      sight: 0,
-      light: 0,
-      [`flags.${MODULE_ID}.${CLOSING_LIGHT_RESTORE_FLAG}`]: restore
-    };
-
-    this.markSourceUpdateIgnored(sourceId);
-    try {
-      await scene.updateEmbeddedDocuments("Wall", [update], { render: false, diff: false });
-    } catch (error) {
-      debug("Could not neutralize source wall light during closing", error);
-    }
-  }
-
-  async restoreSourceWall(sourceId, restore) {
-    const scene = canvas?.scene;
-    if (!scene || !sourceId || !restore) return;
-
-    this.markSourceUpdateIgnored(sourceId);
-    try {
-      await scene.updateEmbeddedDocuments("Wall", [this.restoreUpdateData(sourceId, restore)], { render: false, diff: false });
-    } catch (error) {
-      debug("Could not restore source wall light after closing", error);
-    }
   }
 
   wallDataForSegment(document, segment, lightData = null) {
@@ -1098,7 +1054,7 @@ class AnimatedDoorLightBender {
       frameGapMs: null,
       cleaning: false,
       closing,
-      restore: closing ? sourceLightData : null,
+      restore: null,
       lastCoords: initialCoords.map((coords) => coords.slice())
     };
     this.active.set(sourceId, state);
@@ -1117,7 +1073,6 @@ class AnimatedDoorLightBender {
       }
 
       state.ids = created.map((wall) => wall.id).filter(Boolean);
-      if (closing) await this.neutralizeSourceWall(sourceId, sourceLightData);
       this.startFrameMonitor(sourceId, token);
 
       const tick = () => {
@@ -1163,15 +1118,11 @@ class AnimatedDoorLightBender {
 
   async finishState(sourceId, state) {
     try {
-      if (state.restore) await this.restoreSourceWall(sourceId, state.restore);
-
       if (state.ids?.length && canvas?.scene) {
         await canvas.scene.deleteEmbeddedDocuments("Wall", state.ids, { render: false });
       }
     } catch (error) {
       debug("Could not finish light refraction cleanup", error);
-    } finally {
-      this.pendingClosures.delete(sourceId);
     }
   }
 
@@ -1347,8 +1298,7 @@ class AnimatedDoorManager {
 
   shouldDraw(document, cfg = readDoorConfig(document), { existing = null, animate = false } = {}) {
     if (!canvas?.ready || !document || !isDoorDocument(document) || !cfg.enabled || cfg.animation === "none" || !cfg.texture || !getWallCoords(document)) return false;
-    if (!isSecretDoorDocument(document) || game?.user?.isGM || isOpenDocument(document)) return true;
-    return Boolean(existing && animate);
+    return true;
   }
 
   clearSecretHideTimer(id) {
@@ -1361,14 +1311,6 @@ class AnimatedDoorManager {
     const id = document?.id;
     if (!id) return;
     this.clearSecretHideTimer(id);
-    if (game?.user?.isGM || !isSecretDoorDocument(document) || isOpenDocument(document)) return;
-
-    const delay = animate ? Math.max(0, Number(cfg?.duration) || 0) + 80 : 0;
-    const timer = setTimeout(() => {
-      this.secretHideTimers.delete(id);
-      this.removeWall(id);
-    }, delay);
-    this.secretHideTimers.set(id, timer);
   }
 
   async refreshWall(wall, { animate = true } = {}) {
