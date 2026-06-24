@@ -3,6 +3,7 @@ const LEGACY_MODULE_IDS = Object.freeze(["v11-animated-doors"]);
 const PACKAGE_IDS = Object.freeze([MODULE_ID, ...LEGACY_MODULE_IDS]);
 const CLOSING_LIGHT_RESTORE_FLAG = "closingLightRestore";
 const DOOR_PRIMARY_SORT = -1;
+const DOOR_ELEVATION_OFFSET = 0.01;
 
 const DEFAULTS = Object.freeze({
   enabled: true,
@@ -172,6 +173,22 @@ function getWallDocument(wall) {
   return wall?.document ?? wall;
 }
 
+function getDocumentScene(document) {
+  return document?.parent ?? document?.scene ?? null;
+}
+
+function isCurrentCanvasSceneDocument(document) {
+  const scene = canvas?.scene;
+  if (!scene || !document) return false;
+
+  const documentScene = getDocumentScene(document);
+  if (!documentScene) return true;
+
+  return documentScene === scene
+    || (documentScene.id && documentScene.id === scene.id)
+    || (documentScene.uuid && documentScene.uuid === scene.uuid);
+}
+
 function getWallCoords(document) {
   const coords = document?.c ?? document?._source?.c;
   if (!Array.isArray(coords) || coords.length < 4) return null;
@@ -296,35 +313,188 @@ function cfgKey(cfg) {
   return [cfg.texture, cfg.animation, cfg.direction, cfg.double, cfg.flip, cfg.refractLight, cfg.offsetX, cfg.offsetY].join("|");
 }
 
-function wallElevationValue(document) {
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstFiniteNumber(values, fallback = null) {
+  for (const value of values) {
+    const number = finiteNumber(value);
+    if (number !== null) return number;
+  }
+  return fallback;
+}
+
+function wallElevationRange(document) {
   const flags = document?.flags ?? {};
-  const candidates = [
+  const helperRange = (() => {
+    try {
+      return CONFIG?.Levels?.helpers?.getRangeForDocument?.(document) ?? null;
+    } catch (error) {
+      return null;
+    }
+  })();
+
+  const bottomCandidates = [
+    helperRange?.rangeBottom,
+    flags?.["wall-height"]?.bottom,
+    flags?.levels?.rangeBottom,
+    flags?.wallHeight?.wallHeightBottom,
+    flags?.["wall-height"]?.heightBottom,
     document?.bottom,
     document?._source?.bottom,
     document?.elevation,
     document?._source?.elevation,
-    flags?.["wall-height"]?.bottom,
-    flags?.["wall-height"]?.heightBottom,
-    flags?.levels?.rangeBottom,
     flags?.levels?.wallHeightBottom,
     flags?.levels?.elevation
   ];
 
-  for (const value of candidates) {
-    const number = Number(value);
-    if (Number.isFinite(number)) return number;
-  }
+  const topCandidates = [
+    helperRange?.rangeTop,
+    flags?.["wall-height"]?.top,
+    flags?.levels?.rangeTop,
+    flags?.wallHeight?.wallHeightTop,
+    flags?.["wall-height"]?.heightTop,
+    document?.top,
+    document?._source?.top,
+    flags?.levels?.wallHeightTop
+  ];
 
-  return 0;
+  const bottom = firstFiniteNumber(bottomCandidates, null);
+  const top = firstFiniteNumber(topCandidates, null);
+
+  return {
+    bottom: bottom ?? 0,
+    top: top ?? bottom ?? Infinity,
+    hasRange: bottom !== null || top !== null
+  };
+}
+
+function wallElevationValue(document) {
+  return wallElevationRange(document).bottom;
+}
+
+function doorRenderElevationValue(document) {
+  const elevation = wallElevationValue(document);
+  return (Number.isFinite(elevation) ? elevation : 0) + DOOR_ELEVATION_OFFSET;
 }
 
 function wallGeometryKey(document) {
   const coords = getWallCoords(document);
-  return `${coords?.map((value) => Math.round(Number(value))).join(",") ?? ""}|${wallElevationValue(document)}`;
+  return `${coords?.map((value) => Math.round(Number(value))).join(",") ?? ""}|${doorRenderElevationValue(document)}`;
 }
 
 function doorSortIndex(document) {
   return DOOR_PRIMARY_SORT;
+}
+
+function activeLevelsElevation() {
+  if (!game?.modules?.get?.("levels")?.active && !CONFIG?.Levels) return null;
+
+  if (game?.user?.isGM && CONFIG?.Levels?.UI?.rangeEnabled) {
+    const range = CONFIG.Levels.UI.currentRange ?? CONFIG.Levels.UI.getRange?.();
+    const uiBottom = firstFiniteNumber([
+      range?.bottom,
+      CONFIG.Levels.UI.range?.[0]
+    ], null);
+    const uiTop = firstFiniteNumber([
+      range?.top,
+      CONFIG.Levels.UI.range?.[1]
+    ], null);
+    if (uiBottom !== null || uiTop !== null) {
+      return {
+        bottom: uiBottom ?? -Infinity,
+        top: uiTop ?? Infinity,
+        uiRange: true
+      };
+    }
+  }
+
+  const tokens = [
+    CONFIG?.Levels?.currentToken,
+    ...(canvas?.tokens?.controlled ?? [])
+  ].filter(Boolean);
+  const tokenElevations = [];
+  for (const token of tokens) {
+    const elevation = firstFiniteNumber([
+      token?.losHeight,
+      token?.document?.elevation,
+      token?.elevation
+    ], null);
+    if (elevation !== null) tokenElevations.push(elevation);
+  }
+  if (tokenElevations.length) {
+    return { elevations: Array.from(new Set(tokenElevations)), uiRange: false };
+  }
+
+  const visionSources = Array.from(canvas?.effects?.visionSources?.values?.() ?? []);
+  const visionElevations = [];
+  for (const source of visionSources) {
+    const elevation = finiteNumber(source?.elevation);
+    if (elevation !== null) visionElevations.push(elevation);
+  }
+  if (visionElevations.length) {
+    return { elevations: Array.from(new Set(visionElevations)), uiRange: false };
+  }
+
+  return null;
+}
+
+function doorVisibleForActiveLevel(document) {
+  const active = activeLevelsElevation();
+  if (!active) return true;
+
+  const range = wallElevationRange(document);
+  if (!range.hasRange) return true;
+
+  const bottom = Number.isFinite(range.bottom) ? range.bottom : -Infinity;
+  const top = Number.isFinite(range.top) ? range.top : Infinity;
+  if (active.uiRange) {
+    const activeBottom = Number.isFinite(active.bottom) ? active.bottom : -Infinity;
+    const activeTop = Number.isFinite(active.top) ? active.top : Infinity;
+    return rangesOverlap(bottom, top, activeBottom, activeTop);
+  }
+
+  const elevations = Array.isArray(active.elevations) ? active.elevations : [active.elevation];
+  return elevations.some((elevation) => elevationInRange(elevation, bottom, top));
+}
+
+function rangesOverlap(bottom, top, activeBottom, activeTop) {
+  if (activeTop <= activeBottom) return elevationInRange(activeBottom, bottom, top);
+  if (top <= bottom) return elevationInRange(bottom, activeBottom, activeTop);
+  return bottom < activeTop && top > activeBottom;
+}
+
+function elevationInRange(elevation, bottom, top) {
+  if (!Number.isFinite(elevation)) return false;
+  if (elevation < bottom) return false;
+  return Number.isFinite(top) ? elevation < top : true;
+}
+
+function copyFiniteProps(source, keys) {
+  const result = {};
+  for (const key of keys) {
+    const value = finiteNumber(source?.[key]);
+    if (value !== null) result[key] = value;
+  }
+  return result;
+}
+
+function wallHeightFlagsForTemporaryWall(document) {
+  const flags = document?.flags ?? {};
+  const copied = {};
+
+  const wallHeight = copyFiniteProps(flags?.["wall-height"], ["bottom", "top", "heightBottom", "heightTop"]);
+  if (Object.keys(wallHeight).length) copied["wall-height"] = wallHeight;
+
+  const levels = copyFiniteProps(flags?.levels, ["rangeBottom", "rangeTop", "elevation", "wallHeightBottom", "wallHeightTop"]);
+  if (Object.keys(levels).length) copied.levels = levels;
+
+  const legacyWallHeight = copyFiniteProps(flags?.wallHeight, ["wallHeightBottom", "wallHeightTop"]);
+  if (Object.keys(legacyWallHeight).length) copied.wallHeight = legacyWallHeight;
+
+  return copied;
 }
 
 async function loadDoorTexture(path) {
@@ -398,6 +568,7 @@ class AnimatedDoorOverlay {
     this._destroyed = false;
     this.updateSort();
     this.updateTextureOffset();
+    this.updateLevelVisibility();
     this.rebuildPanels();
     this.applyState(initialOpen, false);
   }
@@ -423,13 +594,14 @@ class AnimatedDoorOverlay {
       this.updateTextureOffset();
       this.rebuildPanels();
     }
+    this.updateLevelVisibility();
   }
 
   updateSort() {
     const sort = doorSortIndex(this.document);
     this.root.zIndex = sort;
     this.root.sort = sort;
-    this.root.elevation = wallElevationValue(this.document);
+    this.root.elevation = doorRenderElevationValue(this.document);
     this.root.shouldRenderDepth = false;
     if (this.root.parent === canvas?.primary) refreshPrimarySort();
   }
@@ -438,6 +610,10 @@ class AnimatedDoorOverlay {
     const x = clampNumber(this.cfg?.offsetX, -10000, 10000, 0);
     const y = clampNumber(this.cfg?.offsetY, -10000, 10000, 0);
     this.root.position.set(x, y);
+  }
+
+  updateLevelVisibility() {
+    this.root.visible = doorVisibleForActiveLevel(this.document);
   }
 
   rebuildPanels() {
@@ -456,6 +632,21 @@ class AnimatedDoorOverlay {
     const angle = Math.atan2(dy, dx);
     const midX = (x1 + x2) / 2;
     const midY = (y1 + y2) / 2;
+    const createSwingPanel = ({ startX, startY, endX, endY, width, texture, name, mirrorX, slideSign = 1 }) => {
+      const hingeAtEnd = Boolean(mirrorX);
+      this.createPanel({
+        x: hingeAtEnd ? endX : startX,
+        y: hingeAtEnd ? endY : startY,
+        angle,
+        width,
+        anchorX: hingeAtEnd ? 1 : 0,
+        texture,
+        name,
+        swingSign: hingeAtEnd ? -1 : 1,
+        slideSign,
+        mirrorX
+      });
+    };
 
     if (this.cfg.double) {
       const half = length / 2;
@@ -463,8 +654,8 @@ class AnimatedDoorOverlay {
       const rightTexture = this.texture;
 
       if (this.cfg.animation === "swing") {
-        this.createPanel({ x: x1, y: y1, angle, width: half, anchorX: 0, texture: leftTexture, name: "left", swingSign: 1, slideSign: -1, mirrorX: this.cfg.flip });
-        this.createPanel({ x: x2, y: y2, angle, width: half, anchorX: 1, texture: rightTexture, name: "right", swingSign: -1, slideSign: 1, mirrorX: !this.cfg.flip });
+        createSwingPanel({ startX: x1, startY: y1, endX: midX, endY: midY, width: half, texture: leftTexture, name: "left", mirrorX: this.cfg.flip, slideSign: -1 });
+        createSwingPanel({ startX: midX, startY: midY, endX: x2, endY: y2, width: half, texture: rightTexture, name: "right", mirrorX: !this.cfg.flip, slideSign: 1 });
         return;
       }
 
@@ -484,7 +675,7 @@ class AnimatedDoorOverlay {
     }
 
     if (this.cfg.animation === "swing") {
-      this.createPanel({ x: x1, y: y1, angle, width: length, anchorX: 0, texture: this.texture, name: "single", swingSign: 1, slideSign: 1, mirrorX: this.cfg.flip });
+      createSwingPanel({ startX: x1, startY: y1, endX: x2, endY: y2, width: length, texture: this.texture, name: "single", mirrorX: this.cfg.flip });
       return;
     }
 
@@ -944,6 +1135,7 @@ class AnimatedDoorLightBender {
   shouldRun(document, overlay, lightData = null) {
     if (!canvas?.ready || !canvas?.scene || !document?.id || !overlay) return false;
     if (!isResponsibleGM()) return false;
+    if (!isCurrentCanvasSceneDocument(document)) return false;
     if (isTemporaryLightWall(document)) return false;
 
     const cfg = overlay.cfg ?? readDoorConfig(document);
@@ -995,6 +1187,13 @@ class AnimatedDoorLightBender {
 
   wallDataForSegment(document, segment, lightData = null) {
     const { sight, light, dir } = lightData ?? this.getSourceLightData(document);
+    const flags = {
+      ...wallHeightFlagsForTemporaryWall(document),
+      [MODULE_ID]: {
+        temporaryLightWall: true,
+        source: document.id
+      }
+    };
 
     return {
       c: roundedSegment(segment),
@@ -1005,12 +1204,7 @@ class AnimatedDoorLightBender {
       dir,
       door: doorNone(),
       ds: 0,
-      flags: {
-        [MODULE_ID]: {
-          temporaryLightWall: true,
-          source: document.id
-        }
-      }
+      flags
     };
   }
 
@@ -1054,6 +1248,7 @@ class AnimatedDoorLightBender {
       frameGapMs: null,
       cleaning: false,
       closing,
+      scene,
       restore: null,
       lastCoords: initialCoords.map((coords) => coords.slice())
     };
@@ -1118,8 +1313,9 @@ class AnimatedDoorLightBender {
 
   async finishState(sourceId, state) {
     try {
-      if (state.ids?.length && canvas?.scene) {
-        await canvas.scene.deleteEmbeddedDocuments("Wall", state.ids, { render: false });
+      const scene = state.scene ?? canvas?.scene;
+      if (state.ids?.length && scene) {
+        await scene.deleteEmbeddedDocuments("Wall", state.ids, { render: false });
       }
     } catch (error) {
       debug("Could not finish light refraction cleanup", error);
@@ -1316,6 +1512,7 @@ class AnimatedDoorManager {
   async refreshWall(wall, { animate = true } = {}) {
     const document = getWallDocument(wall);
     if (!document?.id) return;
+    if (!isCurrentCanvasSceneDocument(document)) return;
 
     const cfg = readDoorConfig(document);
     const existing = this.doors.get(document.id);
@@ -1343,6 +1540,7 @@ class AnimatedDoorManager {
     const texture = await loadDoorTexture(cfg.texture);
     if (this.loading.get(document.id) !== loadId) return;
     this.loading.delete(document.id);
+    if (!isCurrentCanvasSceneDocument(document)) return;
 
     if (!texture) {
       this.removeWall(document.id);
@@ -1367,6 +1565,10 @@ class AnimatedDoorManager {
     if (overlay) overlay.destroy();
     this.doors.delete(id);
     this.loading.delete(id);
+  }
+
+  refreshLevelVisibility() {
+    for (const overlay of this.doors.values()) overlay.updateLevelVisibility();
   }
 }
 
@@ -1751,24 +1953,39 @@ Hooks.on("renderWallConfig", renderWallConfig);
 Hooks.on("canvasReady", () => {
   lightBender.cleanupScene();
   manager.rebuild();
+  manager.refreshLevelVisibility();
 });
 Hooks.on("canvasTearDown", () => manager.clear());
 
 Hooks.on("createWall", (document) => {
+  if (!isCurrentCanvasSceneDocument(document)) return;
   if (isTemporaryLightWall(document)) return;
   manager.refreshWall(document, { animate: false });
 });
 Hooks.on("preUpdateWall", (document, changes) => {
+  if (!isCurrentCanvasSceneDocument(document)) return;
   if (isTemporaryLightWall(document)) return;
   lightBender.prepareClosing(document, changes);
 });
 Hooks.on("updateWall", (document, changes) => {
+  if (!isCurrentCanvasSceneDocument(document)) return;
   if (isTemporaryLightWall(document)) return;
   if (lightBender.shouldIgnoreSourceWallUpdate(document, changes)) return;
   const animate = Object.prototype.hasOwnProperty.call(changes, "ds");
   manager.refreshWall(document, { animate });
 });
 Hooks.on("deleteWall", (document) => {
+  if (!isCurrentCanvasSceneDocument(document)) return;
   if (isTemporaryLightWall(document)) return;
   manager.removeWall(document.id);
+});
+
+Hooks.on("levelsUiChangeLevel", () => manager.refreshLevelVisibility());
+Hooks.on("levelsPerspectiveChanged", () => manager.refreshLevelVisibility());
+Hooks.on("renderLevelsUI", () => manager.refreshLevelVisibility());
+Hooks.on("closeLevelsUI", () => manager.refreshLevelVisibility());
+Hooks.on("controlToken", () => manager.refreshLevelVisibility());
+Hooks.on("updateToken", (document, changes) => {
+  if (!isCurrentCanvasSceneDocument(document)) return;
+  if (Object.prototype.hasOwnProperty.call(changes ?? {}, "elevation")) manager.refreshLevelVisibility();
 });

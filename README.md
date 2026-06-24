@@ -15,6 +15,43 @@ light-blocking walls with the door animation.
 Existing door flags from `v11-animated-doors` are still read, so configured
 doors keep their textures and animation settings after the package rename.
 
+## 0.6.17
+
+- Mirrored swing-door textures now keep a matching hinge side. When `Flip`
+  moves the handle to the opposite side, the swing origin moves to the opposite
+  end of the wall segment instead of opening from the handle side. This applies
+  to single and double swing doors while preserving the visual texture mirror.
+
+## 0.6.16
+
+- Door artwork now renders slightly above the wall's lower Levels elevation
+  while keeping the wall, click control, and light-refraction geometry on the
+  original wall. This keeps doors on ranges like `10-20` visible above same-level
+  floor tiles without putting them above higher-elevation roof or wall art.
+- Levels visibility now uses range overlap instead of requiring the door range
+  to be fully contained in the selected UI range. This avoids boundary issues at
+  exact split points such as `0-10` and `10-20`.
+
+## 0.6.15
+
+- When the Levels UI is open for a GM, animated door texture visibility now
+  follows the currently selected Levels range before considering selected
+  tokens or active vision sources. This prevents doors placed on higher levels
+  from disappearing just because a token or vision source is still on elevation
+  0.
+
+## 0.6.14
+
+- Wall create/update/delete hooks are now scoped to the currently rendered
+  Scene, including async texture-load completion. Animated door textures from
+  other maps no longer appear on the active map, even when wall IDs overlap or
+  a scene changes while a texture is loading.
+- Added Levels and Wall Height range handling for animated door artwork and
+  temporary light-refraction walls. Door textures follow the wall's configured
+  height range instead of always behaving like zero-elevation artwork, and their
+  visibility updates when the Levels UI, perspective token, or token elevation
+  changes.
+
 ## 0.6.13
 
 - Closing doors no longer temporarily set the real wall's `sight` and `light`
